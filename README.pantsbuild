@@ -1,0 +1,18 @@
+ivy
+===
+
+A repo to track modifications of ivy used by pants but not yet merged upstream
+
+
+notes
+===
+
+Created via:
+``` bash
+git svn init -s --no-minimize-url https://svn.apache.org/repos/asf/ant/ivy/core ivy-git
+cd ivy-git
+git svn fetch
+git remote add origin https://github.com/pantsbuild/ivy.git
+git push origin
+```
+
