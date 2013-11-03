@@ -77,13 +77,24 @@ public class IBiblioResolver extends URLResolver {
     // use poms if m2 compatible is true
     private boolean usepoms = true;
     
-    // use maven-metadata.xml is exists to list revisions
+    // use maven-metadata*.xml if it exists to list revisions
     private boolean useMavenMetadata = true;
+
+    private String repoId = null;
 
     public IBiblioResolver() {
         // SNAPSHOT revisions are changing revisions
         setChangingMatcher(PatternMatcher.REGEXP);
         setChangingPattern(".*-SNAPSHOT");
+    }
+
+    /**
+     * If the ibiblio repo is not remote, the repoid
+     * {@link http://maven.apache.org/ref/3.1.1/maven-repository-metadata/} of
+     * the local.
+     */
+    public void setRepoId(String repoId) {
+      this.repoId = repoId;
     }
 
     public ResolvedResource findIvyFileRef(DependencyDescriptor dd, ResolveData data) {
@@ -127,10 +138,10 @@ public class IBiblioResolver extends URLResolver {
 
     private ResolvedResource findSnapshotArtifact(Artifact artifact, Date date,
             ModuleRevisionId mrid) {
-        String rev = findSnapshotVersion(mrid);
-        if (rev != null) {
+        SnapshotMetadata md = findSnapshotMetadata(mrid);
+        if (md != null) {
             // replace the revision token in file name with the resolved revision
-            String pattern = getWholePattern().replaceFirst("\\-\\[revision\\]", "-" + rev);
+            String pattern = getWholePattern().replaceFirst("\\-\\[revision\\]", "-" + md.rev);
             return findResourceUsingPattern(mrid, pattern, artifact,
                 getDefaultRMDParser(artifact.getModuleRevisionId().getModuleId()), date);
         }
@@ -139,23 +150,66 @@ public class IBiblioResolver extends URLResolver {
 
     private ResolvedResource findSnapshotDescriptor(DependencyDescriptor dd, ResolveData data,
             ModuleRevisionId mrid) {
-        String rev = findSnapshotVersion(mrid);
-        if (rev != null) {
+        final SnapshotMetadata md = findSnapshotMetadata(mrid);
+        if (md != null) {
             // here it would be nice to be able to store the resolved snapshot version, to avoid
             // having to follow the same process to download artifacts
             
-            Message.verbose("[" + rev + "] " + mrid);
+            Message.verbose("[" + md.rev + "] " + mrid);
 
             // replace the revision token in file name with the resolved revision
-            String pattern = getWholePattern().replaceFirst("\\-\\[revision\\]", "-" + rev);
-            return findResourceUsingPattern(mrid, pattern,
+            String pattern = getWholePattern().replaceFirst("\\-\\[revision\\]", "-" + md.rev);
+            ResolvedResource snapshotResource = findResourceUsingPattern(mrid, pattern,
                 DefaultArtifact.newPomArtifact(
                     mrid, data.getDate()), getRMDParser(dd, data), data.getDate());
+            if (snapshotResource != null) {
+              snapshotResource = new ResolvedSnapshotResource(snapshotResource, md);
+            }
+            return snapshotResource;
         }
         return null;
     }
-    
-    private String findSnapshotVersion(ModuleRevisionId mrid) {
+
+    private String getMetadataFilename() {
+        if (repoId == null) {
+            return "maven-metadata.xml";
+        } else {
+            return "maven-metadata-" + repoId + ".xml";
+        }
+    }
+
+    /*
+     * A struct that carries along basic metadata for an associated
+     * maven-metadata*.xml file.
+     */
+    private static class SnapshotMetadata {
+        final String rev;
+        final long lastModified;
+
+        private SnapshotMetadata(String rev, long lastModified) {
+            this.rev = rev;
+            this.lastModified = lastModified;
+        }
+    }
+
+    /*
+     * Support re-writing the modification time of a SNAPSHOT resource
+     * based on the associated snapshot metadata modification time.
+     */
+    private static class ResolvedSnapshotResource extends ResolvedResource {
+        private final long lastModified;
+
+        ResolvedSnapshotResource(ResolvedResource resolved, SnapshotMetadata md) {
+            super(resolved.getResource(), resolved.getRevision());
+            lastModified = md.lastModified;
+        }
+
+        public long getLastModified() {
+            return lastModified;
+        }
+    }
+
+    private SnapshotMetadata findSnapshotMetadata(ModuleRevisionId mrid) {
         if (!isM2compatible()) {
             return null;
         }
@@ -164,7 +218,7 @@ public class IBiblioResolver extends URLResolver {
             InputStream metadataStream = null;
             try {
                 String metadataLocation = IvyPatternHelper.substitute(
-                    root + "[organisation]/[module]/[revision]/maven-metadata.xml", mrid);
+                    root + "[organisation]/[module]/[revision]/" + getMetadataFilename(), mrid);
                 Resource metadata = getRepository().getResource(metadataLocation);
                 if (metadata.exists()) {
                     metadataStream = metadata.openStream();
@@ -188,8 +242,10 @@ public class IBiblioResolver extends URLResolver {
                         String rev = mrid.getRevision();
                         rev = rev.substring(0, rev.length() - "SNAPSHOT".length());
                         rev = rev + timestamp.toString() + "-" + buildNumer.toString();
-                        
-                        return rev;
+
+                        return new SnapshotMetadata(rev, metadata.getLastModified());
+                    } else {
+                        return new SnapshotMetadata(mrid.getRevision(), metadata.getLastModified());
                     }
                 } else {
                     Message.verbose("\tmaven-metadata not available: " + metadata);
@@ -400,9 +456,9 @@ public class IBiblioResolver extends URLResolver {
 
                     String patternForRev = pattern;
                     if (rev.endsWith("SNAPSHOT")) {
-                        String snapshotVersion = findSnapshotVersion(historicalMrid);
-                        if (snapshotVersion != null) {
-                            patternForRev = pattern.replaceFirst("\\-\\[revision\\]", "-" + snapshotVersion);
+                        SnapshotMetadata md = findSnapshotMetadata(historicalMrid);
+                        if (md != null) {
+                            patternForRev = pattern.replaceFirst("\\-\\[revision\\]", "-" + md.rev);
                         }
                     }
                     String resolvedPattern = IvyPatternHelper.substitute(
