@@ -94,7 +94,7 @@ public class IBiblioResolver extends URLResolver {
      * the local.
      */
     public void setRepoId(String repoId) {
-      this.repoId = repoId;
+        this.repoId = repoId;
     }
 
     public ResolvedResource findIvyFileRef(DependencyDescriptor dd, ResolveData data) {
